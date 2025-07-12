@@ -23,4 +23,8 @@
     <CopyFileToFolders Include="fragShader.glsl" />
     <CopyFileToFolders Include="vertShader.glsl" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="defaultVertexShader.glsl" />
+    <None Include="defaultFragShader.glsl" />
+  </ItemGroup>
 </Project>

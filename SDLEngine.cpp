@@ -62,9 +62,9 @@ GLuint gIBO = 0;
 GLuint renderingProgram;
 GLuint vao[numVAOs];
 GLuint vbo[numVBOs];
-GLuint mvLoc, pLoc, vLoc;
+GLuint mvLoc, pLoc, vLoc, uColorLoc;
 GLuint tfLoc;
-float aspect, timeFactor;
+float aspect, timeFactor = 0.0f;
 glm::mat4 pMat, vMat, tMat, rMat, mMat, mvMat;
 float cubeLocX, cubeLocY, cubeLocZ;
 
@@ -74,7 +74,7 @@ bool init()
     bool success = true;
 
     //Initialize SDL
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) // Fixed: Correct check for SDL_Init failure
+    if (!SDL_Init(SDL_INIT_VIDEO)) // Fixed: SDL3 returns true on success
     {
         SDL_Log("SDL could not initialize! SDL Error: %s\n", SDL_GetError());
         success = false;
@@ -87,7 +87,7 @@ bool init()
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
         //Create window
-        gWindow = SDL_CreateWindow("SDL Tutorial", SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        gWindow = SDL_CreateWindow("SDL Tutorial", SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_OPENGL);
         if (gWindow == nullptr)
         {
             SDL_Log("Window could not be created! SDL Error: %s\n", SDL_GetError());
@@ -114,7 +114,7 @@ bool init()
                 }
 
                 //Use Vsync
-                if (!SDL_GL_SetSwapInterval(0))
+                if (!SDL_GL_SetSwapInterval(1)) // Fixed: Enable vsync
                 {
                     SDL_Log("Warning: Unable to set VSync! SDL Error: %s\n", SDL_GetError());
                 }
@@ -132,27 +132,52 @@ bool init()
     return success;
 }
 
+// Default vertex shader if file doesn't exist
+const char* defaultVertexShader = R"(
+#version 410
+layout (location = 0) in vec3 position;
+
+uniform mat4 mv_matrix;
+uniform mat4 p_matrix;
+
+void main()
+{
+    gl_Position = p_matrix * mv_matrix * vec4(position, 1.0);
+}
+)";
+
+// Default fragment shader if file doesn't exist
+const char* defaultFragmentShader = R"(
+#version 410
+uniform vec4 uColor;
+out vec4 outColor;
+
+void main()
+{
+    outColor = uColor;
+}
+)";
+
 char* readShaderSource(const char* filename)
 {
     std::ifstream file(filename);
     if (!file)
     {
-        std::cerr << "Failed to open file: " << filename << "\n";
+        std::cerr << "Failed to open file: " << filename << ", using default shader\n";
         return nullptr;
     }
 
     std::stringstream buffer;
-    buffer << file.rdbuf(); // Read entire file into buffer
-    file.close(); // Explicitly close the file
+    buffer << file.rdbuf();
+    file.close();
 
     std::string content = buffer.str();
 
-    // Allocate a new C-string copy of the content
     char* result = new char[content.size() + 1];
     std::copy(content.begin(), content.end(), result);
     result[content.size()] = '\0';
 
-    return result; // Caller must delete[] the returned pointer
+    return result;
 }
 
 void setupVertices()
@@ -179,9 +204,7 @@ void setupVertices()
      -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, // base – left front
      1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f };
 
-
-
-    glGenVertexArrays(1, vao);
+    glGenVertexArrays(numVAOs, vao);
     glBindVertexArray(vao[0]);
     glGenBuffers(numVBOs, vbo);
 
@@ -194,14 +217,14 @@ void setupVertices()
 
 GLuint createShaderProgram()
 {
-    const char* vertexShaderSrc = readShaderSource("vertShader.glsl");
-    const char* fragShaderSrc = readShaderSource("fragShader.glsl");
+    const char* vertexShaderSrc = readShaderSource("defaultVertexShader.glsl");
+    const char* fragShaderSrc = readShaderSource("defaultFragShader.glsl");
 
-    if (!vertexShaderSrc || !fragShaderSrc)
-    {
-        SDL_Log("Failed to read shader source files.\n");
-        return 0;
-    }
+    // Use default shaders if files don't exist
+    if (!vertexShaderSrc)
+        vertexShaderSrc = defaultVertexShader;
+    if (!fragShaderSrc)
+        fragShaderSrc = defaultFragmentShader;
 
     GLuint vShader = glCreateShader(GL_VERTEX_SHADER);
     GLuint fShader = glCreateShader(GL_FRAGMENT_SHADER);
@@ -219,18 +242,23 @@ GLuint createShaderProgram()
         printShaderLog(vShader);
         glDeleteShader(vShader);
         glDeleteShader(fShader);
-        delete[] vertexShaderSrc;
-        delete[] fragShaderSrc;
+        if (vertexShaderSrc != defaultVertexShader)
+            delete[] vertexShaderSrc;
+        if (fragShaderSrc != defaultFragmentShader)
+            delete[] fragShaderSrc;
         return 0;
     }
+
     glGetShaderiv(fShader, GL_COMPILE_STATUS, &success);
     if (!success)
     {
         printShaderLog(fShader);
         glDeleteShader(vShader);
         glDeleteShader(fShader);
-        delete[] vertexShaderSrc;
-        delete[] fragShaderSrc;
+        if (vertexShaderSrc != defaultVertexShader)
+            delete[] vertexShaderSrc;
+        if (fragShaderSrc != defaultFragmentShader)
+            delete[] fragShaderSrc;
         return 0;
     }
 
@@ -247,15 +275,19 @@ GLuint createShaderProgram()
         glDeleteProgram(vfProgram);
         glDeleteShader(vShader);
         glDeleteShader(fShader);
-        delete[] vertexShaderSrc;
-        delete[] fragShaderSrc;
+        if (vertexShaderSrc != defaultVertexShader)
+            delete[] vertexShaderSrc;
+        if (fragShaderSrc != defaultFragmentShader)
+            delete[] fragShaderSrc;
         return 0;
     }
 
     glDeleteShader(vShader);
     glDeleteShader(fShader);
-    delete[] vertexShaderSrc;
-    delete[] fragShaderSrc;
+    if (vertexShaderSrc != defaultVertexShader)
+        delete[] vertexShaderSrc;
+    if (fragShaderSrc != defaultFragmentShader)
+        delete[] fragShaderSrc;
 
     return vfProgram;
 }
@@ -273,14 +305,14 @@ bool initGL()
     camera = glm::vec3(0.0f, 0.0f, 8.0f);
     cube = glm::vec3(0.0f, -2.0f, 0.0f);
 
-    // Initialize projection matrix
-    aspect = static_cast<float>(SCREEN_WIDTH) / SCREEN_HEIGHT;
-    pMat = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 1000.0f);
-
     // Cache uniform locations
-    pLoc = glGetUniformLocation(renderingProgram, "proj_matrix");
-    vLoc = glGetUniformLocation(renderingProgram, "v_matrix");
-    tfLoc = glGetUniformLocation(renderingProgram, "tf");
+    pLoc = glGetUniformLocation(renderingProgram, "p_matrix");
+    mvLoc = glGetUniformLocation(renderingProgram, "mv_matrix");
+    uColorLoc = glGetUniformLocation(renderingProgram, "uColor");
+
+    // Build perspective matrix
+    aspect = (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT;
+    pMat = glm::perspective(glm::radians(60.0f), aspect, 0.1f, 1000.0f);
 
     setupVertices();
 
@@ -297,14 +329,38 @@ void handleKeys(SDL_Scancode key)
 
 void update(float deltaTime)
 {
-    timeFactor += deltaTime; // Update time factor based on delta time
+    timeFactor += deltaTime;
+}
+
+glm::mat4 buildRotateZ(float rad) {
+    glm::mat4 zrot = glm::mat4(cos(rad), -sin(rad), 0.0, 0.0,
+        sin(rad), cos(rad), 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0);
+    return zrot;
+}
+
+glm::mat4 buildRotateX(float rad) {
+    glm::mat4 xrot = glm::mat4(1.0, 0.0, 0.0, 0.0,
+        0.0, cos(rad), -sin(rad), 0.0,
+        0.0, sin(rad), cos(rad), 0.0,
+        0.0, 0.0, 0.0, 1.0);
+    return xrot;
+}
+
+// builds and returns a matrix that performs a rotation around the Y axis
+glm::mat4 buildRotateY(float rad) {
+    glm::mat4 yrot = glm::mat4(cos(rad), 0.0, sin(rad), 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        -sin(rad), 0.0, cos(rad), 0.0,
+        0.0, 0.0, 0.0, 1.0);
+    return yrot;
 }
 
 void render(float deltaTime)
 {
-    glClear(GL_DEPTH_BUFFER_BIT);
+    glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT); // Fixed: Clear both buffers at once
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
 
     if (!gRenderQuad)
         return;
@@ -312,25 +368,40 @@ void render(float deltaTime)
     glUseProgram(renderingProgram);
 
     // Update view matrix
-    vMat = glm::translate(glm::mat4(1.0f), glm::vec3(-camera.x, -camera.y, -camera.z));
+    vMat = glm::translate(glm::mat4(1.0f), -camera);
 
-    // Update model matrix
+    // Bind VAO
+    glBindVertexArray(vao[0]);
+
+    // Draw cube
     mMat = glm::translate(glm::mat4(1.0f), cube);
-    mvMat = vMat * mMat; // Model-view matrix
+    mvMat = vMat * mMat * buildRotateY(glm::radians(40.0f));
 
-    // Pass uniforms to shader
     glUniformMatrix4fv(pLoc, 1, GL_FALSE, glm::value_ptr(pMat));
-    glUniformMatrix4fv(vLoc, 1, GL_FALSE, glm::value_ptr(mvMat)); // Use model-view matrix
-    glUniform1f(tfLoc, timeFactor);
+    glUniformMatrix4fv(mvLoc, 1, GL_FALSE, glm::value_ptr(mvMat));
+    glUniform4f(uColorLoc, 1.0f, 0.0f, 0.0f, 1.0f); // Red color for cube
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo[0]);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
     glEnableVertexAttribArray(0);
 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LEQUAL);
-    for(int i=0;i<10000;i++)
-    glDrawArraysInstanced(GL_TRIANGLES, 0, 36,10000);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+
+    // Draw pyramid
+    mMat = glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 1.0f, 1.0f)); // Fixed: Better positioning
+    mvMat = vMat * mMat * buildRotateX(glm::radians(30.0f));
+
+    glUniformMatrix4fv(mvLoc, 1, GL_FALSE, glm::value_ptr(mvMat));
+    glUniformMatrix4fv(pLoc, 1, GL_FALSE, glm::value_ptr(pMat));
+    glUniform4f(uColorLoc, 0.0f, 1.0f, 0.0f, 1.0f); // Green color for pyramid
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo[1]);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    glEnableVertexAttribArray(0);
+
+    glDrawArrays(GL_TRIANGLES, 0, 18);
 
     // Check for OpenGL errors
     GLenum err;
@@ -409,10 +480,10 @@ int main(int argc, char* args[])
     {
         // Calculate delta time
         Uint32 currentTime = SDL_GetTicks();
-        float deltaTime = (currentTime - lastTime) / 1000.0f; // Convert to seconds
+        float deltaTime = (currentTime - lastTime) / 1000.0f;
         lastTime = currentTime;
 
-        while (SDL_PollEvent(&e) != 0)
+        while (SDL_PollEvent(&e))
         {
             if (e.type == SDL_EVENT_QUIT)
             {
